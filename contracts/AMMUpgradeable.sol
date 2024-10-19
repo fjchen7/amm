@@ -38,30 +38,26 @@ contract AMMUpgradeable is
     uint256 private FEE_PERCENTAGE;
     uint256 private immutable FEE_DENOMINATOR = 10000;
 
-    event LiquidityAdded(
+    event LiquidityChanged(
         address indexed provider,
         address indexed token0,
         address indexed token1,
-        uint256 amount0,
-        uint256 amount1,
-        uint256 liquidity
-    );
-    event LiquidityRemoved(
-        address indexed provider,
-        address indexed token0,
-        address indexed token1,
-        uint256 amount0,
-        uint256 amount1,
-        uint256 liquidity
+        int256 amount0,
+        int256 amount1
     );
     event Swap(
         address indexed user,
         address indexed tokenIn,
-        address indexed tokenOut,
         uint256 amountIn,
         uint256 amountOut
     );
     event FeePercentageChanged(uint256 newFeePercentage);
+    event PoolUpdated(
+        address indexed token0,
+        address indexed token1,
+        uint256 reserve0,
+        uint256 reserve1
+    );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -115,14 +111,14 @@ contract AMMUpgradeable is
         uint256 userLiquidityBalance = ammStorage.userLiquidity(msg.sender, token0, token1);
         ammStorage.setUserLiquidity(msg.sender, token0, token1, userLiquidityBalance + liquidity);
 
-        emit LiquidityAdded(
+        emit LiquidityChanged(
             msg.sender,
             token0,
             token1,
-            amount0,
-            amount1,
-            liquidity
+            int256(amount0),
+            int256(amount1)
         );
+        emit PoolUpdated(token0, token1, pool.token0Balance, pool.token1Balance);
     }
 
     function removeLiquidity(
@@ -149,14 +145,14 @@ contract AMMUpgradeable is
         IERC20(token0).safeTransfer(msg.sender, amount0);
         IERC20(token1).safeTransfer(msg.sender, amount1);
 
-        emit LiquidityRemoved(
+        emit LiquidityChanged(
             msg.sender,
             token0,
             token1,
-            amount0,
-            amount1,
-            liquidity
+            -int256(amount0),
+            -int256(amount1)
         );
+        emit PoolUpdated(token0, token1, pool.token0Balance, pool.token1Balance);
     }
 
     function swap(
@@ -187,7 +183,8 @@ contract AMMUpgradeable is
         }
         ammStorage.setLiquidityPool(tokenIn, tokenOut, pool);
 
-        emit Swap(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
+        emit Swap(msg.sender, tokenIn, amountIn, amountOut);
+        emit PoolUpdated(tokenIn, tokenOut, pool.token0Balance, pool.token1Balance);
     }
 
     function pause() external onlyRole(PAUSER_ROLE) {
