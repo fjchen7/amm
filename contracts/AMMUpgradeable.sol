@@ -31,10 +31,6 @@ contract AMMUpgradeable is
         uint256 totalLiquidity;
     }
 
-    mapping(address => mapping(address => LiquidityPool)) public liquidityPools;
-    mapping(address => mapping(address => mapping(address => uint256)))
-        public userLiquidity;
-
     uint256 private FEE_PERCENTAGE;
     uint256 private FEE_DENOMINATOR;
 
@@ -264,5 +260,10 @@ contract AMMUpgradeable is
         require(newFeePercentage <= FEE_DENOMINATOR, "Fee percentage too high");
         FEE_PERCENTAGE = newFeePercentage;
         emit FeePercentageChanged(newFeePercentage);
+    }
+
+    function getLiquidityPool(address token0, address token1) public view returns (uint256, uint256, uint256) {
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(token0, token1);
+        return (pool.token0Balance, pool.token1Balance, pool.totalLiquidity);
     }
 }
