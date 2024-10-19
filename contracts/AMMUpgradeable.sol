@@ -36,7 +36,7 @@ contract AMMUpgradeable is
         public userLiquidity;
 
     uint256 private FEE_PERCENTAGE;
-    uint256 private immutable FEE_DENOMINATOR = 10000;
+    uint256 private FEE_DENOMINATOR;
 
     event LiquidityChanged(
         address indexed provider,
@@ -61,10 +61,13 @@ contract AMMUpgradeable is
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
-        _disableInitializers();
+        // _disableInitializers();
     }
 
-    function initialize(address admin, address storageAddress) public initializer {
+    function initialize(
+        address admin,
+        address storageAddress
+    ) public initializer {
         __AccessControl_init();
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
@@ -76,6 +79,7 @@ contract AMMUpgradeable is
 
         ammStorage = AMMStorage(storageAddress);
         FEE_PERCENTAGE = 30; // 设置初始费率为 0.3%
+        FEE_DENOMINATOR = 10000;
     }
 
     function addLiquidity(
@@ -87,15 +91,20 @@ contract AMMUpgradeable is
         require(token0 != token1, "Identical tokens");
         require(amount0 > 0 && amount1 > 0, "Amounts must be positive");
 
-        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(token0, token1);
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(
+            token0,
+            token1
+        );
         uint256 liquidity;
 
         if (pool.totalLiquidity == 0) {
             liquidity = Math.sqrt(amount0 * amount1);
             require(liquidity > 0, "Insufficient liquidity minted");
         } else {
-            uint256 liquidity0 = (amount0 * pool.totalLiquidity) / pool.token0Balance;
-            uint256 liquidity1 = (amount1 * pool.totalLiquidity) / pool.token1Balance;
+            uint256 liquidity0 = (amount0 * pool.totalLiquidity) /
+                pool.token0Balance;
+            uint256 liquidity1 = (amount1 * pool.totalLiquidity) /
+                pool.token1Balance;
             liquidity = Math.min(liquidity0, liquidity1);
             require(liquidity > 0, "Insufficient liquidity minted");
         }
@@ -108,8 +117,17 @@ contract AMMUpgradeable is
         pool.totalLiquidity += liquidity;
         ammStorage.setLiquidityPool(token0, token1, pool);
 
-        uint256 userLiquidityBalance = ammStorage.userLiquidity(msg.sender, token0, token1);
-        ammStorage.setUserLiquidity(msg.sender, token0, token1, userLiquidityBalance + liquidity);
+        uint256 userLiquidityBalance = ammStorage.userLiquidity(
+            msg.sender,
+            token0,
+            token1
+        );
+        ammStorage.setUserLiquidity(
+            msg.sender,
+            token0,
+            token1,
+            userLiquidityBalance + liquidity
+        );
 
         emit LiquidityChanged(
             msg.sender,
@@ -118,7 +136,12 @@ contract AMMUpgradeable is
             int256(amount0),
             int256(amount1)
         );
-        emit PoolUpdated(token0, token1, pool.token0Balance, pool.token1Balance);
+        emit PoolUpdated(
+            token0,
+            token1,
+            pool.token0Balance,
+            pool.token1Balance
+        );
     }
 
     function removeLiquidity(
@@ -127,20 +150,37 @@ contract AMMUpgradeable is
         uint256 liquidity
     ) external nonReentrant whenNotPaused {
         require(liquidity > 0, "Insufficient liquidity burned");
-        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(token0, token1);
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(
+            token0,
+            token1
+        );
         require(pool.totalLiquidity > 0, "Pool does not exist");
 
-        uint256 userLiquidityBalance = ammStorage.userLiquidity(msg.sender, token0, token1);
-        require(userLiquidityBalance >= liquidity, "Insufficient user liquidity");
+        uint256 userLiquidityBalance = ammStorage.userLiquidity(
+            msg.sender,
+            token0,
+            token1
+        );
+        require(
+            userLiquidityBalance >= liquidity,
+            "Insufficient user liquidity"
+        );
 
-        uint256 amount0 = (liquidity * pool.token0Balance) / pool.totalLiquidity;
-        uint256 amount1 = (liquidity * pool.token1Balance) / pool.totalLiquidity;
+        uint256 amount0 = (liquidity * pool.token0Balance) /
+            pool.totalLiquidity;
+        uint256 amount1 = (liquidity * pool.token1Balance) /
+            pool.totalLiquidity;
 
         pool.token0Balance -= amount0;
         pool.token1Balance -= amount1;
         pool.totalLiquidity -= liquidity;
         ammStorage.setLiquidityPool(token0, token1, pool);
-        ammStorage.setUserLiquidity(msg.sender, token0, token1, userLiquidityBalance - liquidity);
+        ammStorage.setUserLiquidity(
+            msg.sender,
+            token0,
+            token1,
+            userLiquidityBalance - liquidity
+        );
 
         IERC20(token0).safeTransfer(msg.sender, amount0);
         IERC20(token1).safeTransfer(msg.sender, amount1);
@@ -152,7 +192,12 @@ contract AMMUpgradeable is
             -int256(amount0),
             -int256(amount1)
         );
-        emit PoolUpdated(token0, token1, pool.token0Balance, pool.token1Balance);
+        emit PoolUpdated(
+            token0,
+            token1,
+            pool.token0Balance,
+            pool.token1Balance
+        );
     }
 
     function swap(
@@ -163,16 +208,25 @@ contract AMMUpgradeable is
         require(tokenIn != tokenOut, "Identical tokens");
         require(amountIn > 0, "Amount must be positive");
 
-        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(tokenIn, tokenOut);
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(
+            tokenIn,
+            tokenOut
+        );
         require(pool.totalLiquidity > 0, "Pool does not exist");
 
-        uint256 amountInWithFee = (amountIn * (FEE_DENOMINATOR - FEE_PERCENTAGE)) / FEE_DENOMINATOR;
+        uint256 amountInWithFee = (amountIn *
+            (FEE_DENOMINATOR - FEE_PERCENTAGE)) / FEE_DENOMINATOR;
         uint256 amountOut;
         unchecked {
-            amountOut = (pool.token1Balance * amountInWithFee) / (pool.token0Balance + amountInWithFee);
+            amountOut =
+                (pool.token1Balance * amountInWithFee) /
+                (pool.token0Balance + amountInWithFee);
         }
 
-        require(amountOut > 0 && amountOut < pool.token1Balance, "Invalid output amount");
+        require(
+            amountOut > 0 && amountOut < pool.token1Balance,
+            "Invalid output amount"
+        );
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
@@ -184,7 +238,12 @@ contract AMMUpgradeable is
         ammStorage.setLiquidityPool(tokenIn, tokenOut, pool);
 
         emit Swap(msg.sender, tokenIn, amountIn, amountOut);
-        emit PoolUpdated(tokenIn, tokenOut, pool.token0Balance, pool.token1Balance);
+        emit PoolUpdated(
+            tokenIn,
+            tokenOut,
+            pool.token0Balance,
+            pool.token1Balance
+        );
     }
 
     function pause() external onlyRole(PAUSER_ROLE) {
@@ -199,7 +258,9 @@ contract AMMUpgradeable is
         address newImplementation
     ) internal override onlyRole(UPGRADER_ROLE) {}
 
-    function setFeePercentage(uint256 newFeePercentage) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setFeePercentage(
+        uint256 newFeePercentage
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(newFeePercentage <= FEE_DENOMINATOR, "Fee percentage too high");
         FEE_PERCENTAGE = newFeePercentage;
         emit FeePercentageChanged(newFeePercentage);
