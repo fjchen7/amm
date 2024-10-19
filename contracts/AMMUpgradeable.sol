@@ -35,8 +35,8 @@ contract AMMUpgradeable is
     mapping(address => mapping(address => mapping(address => uint256)))
         public userLiquidity;
 
-    uint256 public constant FEE_PERCENTAGE = 30; // 0.3%
-    uint256 public constant FEE_DENOMINATOR = 10000;
+    uint256 private FEE_PERCENTAGE;
+    uint256 private immutable FEE_DENOMINATOR = 10000;
 
     event LiquidityAdded(
         address indexed provider,
@@ -61,6 +61,7 @@ contract AMMUpgradeable is
         uint256 amountIn,
         uint256 amountOut
     );
+    event FeePercentageChanged(uint256 newFeePercentage);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -78,6 +79,7 @@ contract AMMUpgradeable is
         _grantRole(PAUSER_ROLE, admin);
 
         ammStorage = AMMStorage(storageAddress);
+        FEE_PERCENTAGE = 30; // 设置初始费率为 0.3%
     }
 
     function addLiquidity(
@@ -88,23 +90,22 @@ contract AMMUpgradeable is
     ) external nonReentrant whenNotPaused {
         require(token0 != token1, "Identical tokens");
         require(amount0 > 0 && amount1 > 0, "Amounts must be positive");
-        require(amount0 <= type(uint256).max / 1e18, "Amount too large");
-
-        IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
-        IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
 
         AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(token0, token1);
         uint256 liquidity;
 
         if (pool.totalLiquidity == 0) {
             liquidity = Math.sqrt(amount0 * amount1);
+            require(liquidity > 0, "Insufficient liquidity minted");
         } else {
             uint256 liquidity0 = (amount0 * pool.totalLiquidity) / pool.token0Balance;
             uint256 liquidity1 = (amount1 * pool.totalLiquidity) / pool.token1Balance;
             liquidity = Math.min(liquidity0, liquidity1);
+            require(liquidity > 0, "Insufficient liquidity minted");
         }
 
-        require(liquidity > 0, "Insufficient liquidity minted");
+        IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
+        IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
 
         pool.token0Balance += amount0;
         pool.token1Balance += amount1;
@@ -130,26 +131,20 @@ contract AMMUpgradeable is
         uint256 liquidity
     ) external nonReentrant whenNotPaused {
         require(liquidity > 0, "Insufficient liquidity burned");
-        LiquidityPool storage pool = liquidityPools[token0][token1];
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(token0, token1);
         require(pool.totalLiquidity > 0, "Pool does not exist");
 
-        uint256 userLiquidityBalance = userLiquidity[msg.sender][token0][
-            token1
-        ];
-        require(
-            userLiquidityBalance >= liquidity,
-            "Insufficient user liquidity"
-        );
+        uint256 userLiquidityBalance = ammStorage.userLiquidity(msg.sender, token0, token1);
+        require(userLiquidityBalance >= liquidity, "Insufficient user liquidity");
 
-        uint256 amount0 = (liquidity * pool.token0Balance) /
-            pool.totalLiquidity;
-        uint256 amount1 = (liquidity * pool.token1Balance) /
-            pool.totalLiquidity;
+        uint256 amount0 = (liquidity * pool.token0Balance) / pool.totalLiquidity;
+        uint256 amount1 = (liquidity * pool.token1Balance) / pool.totalLiquidity;
 
         pool.token0Balance -= amount0;
         pool.token1Balance -= amount1;
         pool.totalLiquidity -= liquidity;
-        userLiquidity[msg.sender][token0][token1] -= liquidity;
+        ammStorage.setLiquidityPool(token0, token1, pool);
+        ammStorage.setUserLiquidity(msg.sender, token0, token1, userLiquidityBalance - liquidity);
 
         IERC20(token0).safeTransfer(msg.sender, amount0);
         IERC20(token1).safeTransfer(msg.sender, amount1);
@@ -171,24 +166,26 @@ contract AMMUpgradeable is
     ) external nonReentrant whenNotPaused {
         require(tokenIn != tokenOut, "Identical tokens");
         require(amountIn > 0, "Amount must be positive");
-        require(amountIn <= type(uint256).max / 1e18, "Amount too large"); // 防止潜在的溢出
 
-        LiquidityPool storage pool = liquidityPools[tokenIn][tokenOut];
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(tokenIn, tokenOut);
         require(pool.totalLiquidity > 0, "Pool does not exist");
 
-        uint256 amountInWithFee = (amountIn *
-            (FEE_DENOMINATOR - FEE_PERCENTAGE)) / FEE_DENOMINATOR;
-        uint256 amountOut = (pool.token1Balance * amountInWithFee) /
-            (pool.token0Balance + amountInWithFee);
+        uint256 amountInWithFee = (amountIn * (FEE_DENOMINATOR - FEE_PERCENTAGE)) / FEE_DENOMINATOR;
+        uint256 amountOut;
+        unchecked {
+            amountOut = (pool.token1Balance * amountInWithFee) / (pool.token0Balance + amountInWithFee);
+        }
 
-        require(amountOut > 0, "Insufficient output amount");
-        require(amountOut < pool.token1Balance, "Insufficient liquidity");
+        require(amountOut > 0 && amountOut < pool.token1Balance, "Invalid output amount");
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
 
-        pool.token0Balance += amountIn;
-        pool.token1Balance -= amountOut;
+        unchecked {
+            pool.token0Balance += amountIn;
+            pool.token1Balance -= amountOut;
+        }
+        ammStorage.setLiquidityPool(tokenIn, tokenOut, pool);
 
         emit Swap(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
     }
@@ -204,4 +201,10 @@ contract AMMUpgradeable is
     function _authorizeUpgrade(
         address newImplementation
     ) internal override onlyRole(UPGRADER_ROLE) {}
+
+    function setFeePercentage(uint256 newFeePercentage) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newFeePercentage <= FEE_DENOMINATOR, "Fee percentage too high");
+        FEE_PERCENTAGE = newFeePercentage;
+        emit FeePercentageChanged(newFeePercentage);
+    }
 }
