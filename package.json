@@ -2,7 +2,8 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@openzeppelin/hardhat-upgrades": "^3.5.0",
-    "hardhat": "^2.22.13"
+    "hardhat": "^2.22.13",
+    "dotenv": "^16.4.5"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.1.0",
@@ -12,6 +13,9 @@
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
     "deploy": "npx hardhat ignition deploy",
+    "deploy:local": "npx hardhat ignition deploy ignition/modules/AMMUpgradeable.ts --parameters ignition/parameters.json --network localhost",
+    "deploy:testnet": "npx hardhat ignition deploy ignition/modules/AMMUpgradeable.ts --parameters ignition/parameters.json --network goerli",
+    "deploy:mainnet": "npx hardhat ignition deploy ignition/modules/AMMUpgradeable.ts --parameters ignition/parameters.json --network mainnet",
     "node": "npx hardhat node",
     "coverage": "npx hardhat coverage"
   }
