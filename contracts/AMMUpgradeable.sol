@@ -9,6 +9,7 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "./AMMStorage.sol";
 
 contract AMMUpgradeable is
     Initializable,
@@ -21,6 +22,8 @@ contract AMMUpgradeable is
 
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    AMMStorage public ammStorage;
 
     struct LiquidityPool {
         uint256 token0Balance;
@@ -64,7 +67,7 @@ contract AMMUpgradeable is
         _disableInitializers();
     }
 
-    function initialize(address admin) public initializer {
+    function initialize(address admin, address storageAddress) public initializer {
         __AccessControl_init();
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
@@ -73,6 +76,8 @@ contract AMMUpgradeable is
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
         _grantRole(PAUSER_ROLE, admin);
+
+        ammStorage = AMMStorage(storageAddress);
     }
 
     function addLiquidity(
@@ -83,21 +88,19 @@ contract AMMUpgradeable is
     ) external nonReentrant whenNotPaused {
         require(token0 != token1, "Identical tokens");
         require(amount0 > 0 && amount1 > 0, "Amounts must be positive");
-        require(amount0 <= type(uint256).max / 1e18, "Amount too large"); // 防止潜在的溢出
+        require(amount0 <= type(uint256).max / 1e18, "Amount too large");
 
         IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
         IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
 
-        LiquidityPool storage pool = liquidityPools[token0][token1];
+        AMMStorage.LiquidityPool memory pool = ammStorage.getLiquidityPool(token0, token1);
         uint256 liquidity;
 
         if (pool.totalLiquidity == 0) {
             liquidity = Math.sqrt(amount0 * amount1);
         } else {
-            uint256 liquidity0 = (amount0 * pool.totalLiquidity) /
-                pool.token0Balance;
-            uint256 liquidity1 = (amount1 * pool.totalLiquidity) /
-                pool.token1Balance;
+            uint256 liquidity0 = (amount0 * pool.totalLiquidity) / pool.token0Balance;
+            uint256 liquidity1 = (amount1 * pool.totalLiquidity) / pool.token1Balance;
             liquidity = Math.min(liquidity0, liquidity1);
         }
 
@@ -106,7 +109,10 @@ contract AMMUpgradeable is
         pool.token0Balance += amount0;
         pool.token1Balance += amount1;
         pool.totalLiquidity += liquidity;
-        userLiquidity[msg.sender][token0][token1] += liquidity;
+        ammStorage.setLiquidityPool(token0, token1, pool);
+
+        uint256 userLiquidityBalance = ammStorage.userLiquidity(msg.sender, token0, token1);
+        ammStorage.setUserLiquidity(msg.sender, token0, token1, userLiquidityBalance + liquidity);
 
         emit LiquidityAdded(
             msg.sender,
